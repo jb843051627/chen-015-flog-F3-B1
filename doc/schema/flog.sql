@@ -43,6 +43,23 @@ CREATE TABLE IF NOT EXISTS t_flog_close_card (
   PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='伐区勾销事务卡';
 
+CREATE TABLE IF NOT EXISTS t_flog_declare_batch (
+  id bigint NOT NULL COMMENT '主键',
+  batch_no varchar(64) NOT NULL COMMENT '伐区申报清册批次号',
+  total_count int DEFAULT NULL COMMENT '本批应收行数（成功+挂起须等于此数）',
+  ok_count int DEFAULT NULL COMMENT '本批核收成功行数',
+  fail_count int DEFAULT NULL COMMENT '本批挂起行数',
+  status int DEFAULT NULL COMMENT '批次情形 1已核收',
+  del_flag int DEFAULT '0' COMMENT '删除标记 0正常 1删除',
+  create_by varchar(64) DEFAULT NULL COMMENT '创建者',
+  create_time datetime DEFAULT NULL COMMENT '创建时间',
+  update_by varchar(64) DEFAULT NULL COMMENT '更新者',
+  update_time datetime DEFAULT NULL COMMENT '更新时间',
+  remark varchar(500) DEFAULT NULL COMMENT '备注',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_batch_no (batch_no)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='伐区申报清册批次头';
+
 CREATE TABLE IF NOT EXISTS t_flog_declare_row (
   id bigint NOT NULL COMMENT '主键',
   batch_no varchar(64) DEFAULT NULL COMMENT '伐区申报清册批次号',
@@ -56,7 +73,8 @@ CREATE TABLE IF NOT EXISTS t_flog_declare_row (
   update_by varchar(64) DEFAULT NULL COMMENT '更新者',
   update_time datetime DEFAULT NULL COMMENT '更新时间',
   remark varchar(500) DEFAULT NULL COMMENT '备注',
-  PRIMARY KEY (id)
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_batch_row (batch_no, row_no)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='伐区申报清册核收行';
 
 CREATE TABLE IF NOT EXISTS t_flog_permit_bill (

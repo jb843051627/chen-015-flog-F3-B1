@@ -53,15 +53,17 @@ public class TFlogApplyCardServiceImpl extends ServiceImpl<TFlogApplyCardMapper,
         }
 
         record.setCreateBy(record.getBillNo());
-        TFlogStandDoc refArch = flogStandDocMapper.selectOne(new QueryWrapper<TFlogStandDoc>()
-                .eq("id", record.getSiteId()).eq("del_flag", 0));
-        if (refArch == null) {
+        // 编制单位在册底档口径全系统统一：del_flag=0 且 status=0（在册）才算可用底档。
+        // 存在性校验、site_no 回填、三档阈值取用必须同源同一条底档，禁止一处带状态过滤、
+        // 另一处按主键裸查（已收回/已删底档会让两头结论对不上）。
+        TFlogStandDoc arch = flogStandDocMapper.selectOne(new QueryWrapper<TFlogStandDoc>()
+                .eq("id", record.getSiteId())
+                .eq("del_flag", 0)
+                .eq("status", 0));
+        if (arch == null) {
             return 0;
         }
-        if (refArch.getStatus() != null && refArch.getStatus() == 1) {
-            return 0;
-        }
-        record.setSiteNo(refArch.getSiteNo());
+        record.setSiteNo(arch.getSiteNo());
         if (StringUtils.isNotEmpty(record.getBillNo())) {
             Integer dupCnt = this.baseMapper.selectCount(new QueryWrapper<TFlogApplyCard>()
                     .eq("bill_no", record.getBillNo()).eq("del_flag", 0));
@@ -69,15 +71,14 @@ public class TFlogApplyCardServiceImpl extends ServiceImpl<TFlogApplyCardMapper,
                 return 0;
             }
         }
-        TFlogStandDoc bandArch = flogStandDocMapper.selectById(record.getSiteId());
         BigDecimal bandVal = record.getQty();
         int bandLevel = 0;
-        if (bandVal != null && bandArch != null) {
-            if (bandVal.compareTo(bandArch.getTh1Max()) <= 0) {
+        if (bandVal != null) {
+            if (bandVal.compareTo(arch.getTh1Max()) <= 0) {
                 bandLevel = 1;
-            } else if (bandVal.compareTo(bandArch.getTh2Max()) <= 0) {
+            } else if (bandVal.compareTo(arch.getTh2Max()) <= 0) {
                 bandLevel = 2;
-            } else if (bandVal.compareTo(bandArch.getTh3Max()) <= 0) {
+            } else if (bandVal.compareTo(arch.getTh3Max()) <= 0) {
                 bandLevel = 3;
             } else {
                 bandLevel = 4;
