@@ -1,6 +1,5 @@
 package com.fc.v2.service.impl;
 
-import java.math.BigDecimal;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
@@ -11,16 +10,21 @@ import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fc.v2.common.support.ConvertUtil;
 import com.fc.v2.mapper.auto.TFlogApplyCardMapper;
-import com.fc.v2.mapper.auto.TFlogStandDocMapper;
 import com.fc.v2.model.auto.TFlogApplyCard;
 import com.fc.v2.model.auto.TFlogStandDoc;
 import com.fc.v2.service.ITFlogApplyCardService;
+import com.fc.v2.service.support.TFlogStandDocPolicy;
 import com.fc.v2.util.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 /**
  * 伐区采伐申请建档卡Service业务层处理
+ *
+ * <p>编制单位在册底档相关口径（在册校验、site_no 回填、三线上限定档）
+ * 一律走 {@link TFlogStandDocPolicy}，本类不得另写一套——插入、修改、
+ * 下游汇总看到的必须是同一个规矩。</p>
  *
  * @author fuce
  * @date 2026-09-12
@@ -29,7 +33,7 @@ import org.springframework.stereotype.Service;
 public class TFlogApplyCardServiceImpl extends ServiceImpl<TFlogApplyCardMapper, TFlogApplyCard> implements ITFlogApplyCardService {
 
     @Autowired
-    private TFlogStandDocMapper flogStandDocMapper;
+    private TFlogStandDocPolicy standDocPolicy;
 
     @Override
     public TFlogApplyCard selectTFlogApplyCardById(Long id) {
@@ -40,9 +44,15 @@ public class TFlogApplyCardServiceImpl extends ServiceImpl<TFlogApplyCardMapper,
 
     @Override
     public List<TFlogApplyCard> selectTFlogApplyCardList(Wrapper<TFlogApplyCard> queryWrapper) {
-        QueryWrapper<TFlogApplyCard> wrapper = new QueryWrapper<TFlogApplyCard>();
-        com.github.pagehelper.PageHelper.startPage(1, 10);
-        wrapper.eq("status", 0);
+        // 调用方的查询条件照单全收（含控制器 startPage 的分页），只统一补上"未删除"口径，
+        // 不再硬编码 status=0、另起一页 10 条那种无视入参的写法。
+        QueryWrapper<TFlogApplyCard> wrapper;
+        if (queryWrapper instanceof QueryWrapper) {
+            wrapper = (QueryWrapper<TFlogApplyCard>) queryWrapper;
+        } else {
+            wrapper = new QueryWrapper<TFlogApplyCard>();
+        }
+        wrapper.eq("del_flag", 0);
         return this.baseMapper.selectList(wrapper);
     }
 
@@ -52,16 +62,16 @@ public class TFlogApplyCardServiceImpl extends ServiceImpl<TFlogApplyCardMapper,
             return 0;
         }
 
+        // 既有口径：建档卡创建者取建档卡号（保持旧行为，勿擅改）
         record.setCreateBy(record.getBillNo());
-        TFlogStandDoc refArch = flogStandDocMapper.selectOne(new QueryWrapper<TFlogStandDoc>()
-                .eq("id", record.getSiteId()).eq("del_flag", 0));
-        if (refArch == null) {
+        // 编制单位必须在册（存在、未删、未收回），底档字号与取用顺位同源回填。
+        TFlogStandDoc arch = this.standDocPolicy.requireActiveStandDoc(toSiteId(record.getSiteId()));
+        if (arch == null) {
             return 0;
         }
-        if (refArch.getStatus() != null && refArch.getStatus() == 1) {
-            return 0;
-        }
-        record.setSiteNo(refArch.getSiteNo());
+        record.setSiteNo(arch.getSiteNo());
+        record.setGradeLevel(Integer.valueOf(this.standDocPolicy.gradeLevel(arch, record.getQty())));
+
         if (StringUtils.isNotEmpty(record.getBillNo())) {
             Integer dupCnt = this.baseMapper.selectCount(new QueryWrapper<TFlogApplyCard>()
                     .eq("bill_no", record.getBillNo()).eq("del_flag", 0));
@@ -69,24 +79,13 @@ public class TFlogApplyCardServiceImpl extends ServiceImpl<TFlogApplyCardMapper,
                 return 0;
             }
         }
-        TFlogStandDoc bandArch = flogStandDocMapper.selectById(record.getSiteId());
-        BigDecimal bandVal = record.getQty();
-        int bandLevel = 0;
-        if (bandVal != null && bandArch != null) {
-            if (bandVal.compareTo(bandArch.getTh1Max()) <= 0) {
-                bandLevel = 1;
-            } else if (bandVal.compareTo(bandArch.getTh2Max()) <= 0) {
-                bandLevel = 2;
-            } else if (bandVal.compareTo(bandArch.getTh3Max()) <= 0) {
-                bandLevel = 3;
-            } else {
-                bandLevel = 4;
-            }
-        }
-        record.setGradeLevel(bandLevel);
-
         record.setDelFlag(0);
-        return this.baseMapper.insert(record);
+        try {
+            return this.baseMapper.insert(record);
+        } catch (DuplicateKeyException concurrentDup) {
+            // 同号并发抢注：活跃单号唯一索引兜底，后来者拒入。
+            return 0;
+        }
     }
 
     @Override
@@ -94,8 +93,14 @@ public class TFlogApplyCardServiceImpl extends ServiceImpl<TFlogApplyCardMapper,
         if (record == null || record.getId() == null) {
             return 0;
         }
+        TFlogApplyCard existed = this.baseMapper.selectOne(new QueryWrapper<TFlogApplyCard>()
+                .eq("id", record.getId())
+                .eq("del_flag", 0));
+        if (existed == null) {
+            return 0;
+        }
 
-        if (record.getId() != null && StringUtils.isNotEmpty(record.getBillNo())) {
+        if (StringUtils.isNotEmpty(record.getBillNo())) {
             Integer dupCnt = this.baseMapper.selectCount(new QueryWrapper<TFlogApplyCard>()
                     .eq("bill_no", record.getBillNo()).ne("id", record.getId()).eq("del_flag", 0));
             if (dupCnt != null && dupCnt > 0) {
@@ -103,20 +108,54 @@ public class TFlogApplyCardServiceImpl extends ServiceImpl<TFlogApplyCardMapper,
             }
         }
 
+        // 改挂单位时按新底档重新校验在册；未传单位则沿用原单位。两条路同一个口径。
+        Integer siteIdVal = record.getSiteId() != null ? record.getSiteId() : existed.getSiteId();
+        TFlogStandDoc arch = this.standDocPolicy.requireActiveStandDoc(toSiteId(siteIdVal));
+        if (arch == null) {
+            return 0;
+        }
+        record.setSiteId(siteIdVal);
+        record.setSiteNo(arch.getSiteNo());
+        // 数量未传视为不变，按现值重新定档；保证库里 grade_level 与 qty 永远同口径。
+        java.math.BigDecimal qty = record.getQty() != null ? record.getQty() : existed.getQty();
+        record.setGradeLevel(Integer.valueOf(this.standDocPolicy.gradeLevel(arch, qty)));
+
         record.setUpdateTime(new Date());
-        return this.baseMapper.update(record, new UpdateWrapper<TFlogApplyCard>()
-                .eq("id", record.getId())
-                .eq("del_flag", 0));
+        try {
+            return this.baseMapper.update(record, new UpdateWrapper<TFlogApplyCard>()
+                    .eq("id", record.getId())
+                    .eq("del_flag", 0));
+        } catch (DuplicateKeyException concurrentDup) {
+            return 0;
+        }
+    }
+
+    /** 建档卡 site_id 为 Integer，底档主键为 Long，边界处统一转换 */
+    private static Long toSiteId(Integer siteId) {
+        return siteId == null ? null : siteId.longValue();
     }
 
     @Override
     public int deleteTFlogApplyCardByIds(String ids) {
         Long[] idArr = ConvertUtil.toLongArray(ids);
-        return this.baseMapper.deleteBatchIds(Arrays.asList(idArr));
+        if (idArr == null || idArr.length == 0) {
+            return 0;
+        }
+        // 软删留痕，旧账永远查得回来；不动物理行。
+        return this.baseMapper.update(null, new UpdateWrapper<TFlogApplyCard>()
+                .set("del_flag", 1)
+                .in("id", Arrays.asList(idArr))
+                .eq("del_flag", 0));
     }
 
     @Override
     public int deleteTFlogApplyCardById(Long id) {
-        return this.baseMapper.deleteById(id);
+        if (id == null) {
+            return 0;
+        }
+        return this.baseMapper.update(null, new UpdateWrapper<TFlogApplyCard>()
+                .set("del_flag", 1)
+                .eq("id", id)
+                .eq("del_flag", 0));
     }
 }

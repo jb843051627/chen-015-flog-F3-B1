@@ -131,6 +131,35 @@ CREATE TABLE IF NOT EXISTS t_flog_yield_rule (
   PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='可采强度界限值线';
 
+-- 批次台账表 + 各表活跃唯一索引（2026-09-30 规矩并轨）
+-- 唯一约束只认"活跃行"：软删/失败行以 NULL 占位，不参与唯一性（MySQL 8 函数索引）。
+
+CREATE TABLE IF NOT EXISTS t_flog_declare_batch (
+  id bigint NOT NULL COMMENT '主键',
+  batch_no varchar(64) DEFAULT NULL COMMENT '伐区申报清册批次号',
+  total_rows int DEFAULT NULL COMMENT '批内总行数(不含空行)',
+  ok_rows int DEFAULT NULL COMMENT '核收成功行数',
+  fail_rows int DEFAULT NULL COMMENT '核收失败行数',
+  status int DEFAULT NULL COMMENT '台账情形 0受理中 1已结清',
+  del_flag int DEFAULT '0' COMMENT '删除标记 0正常 1删除',
+  create_by varchar(64) DEFAULT NULL COMMENT '创建者',
+  create_time datetime DEFAULT NULL COMMENT '创建时间',
+  update_by varchar(64) DEFAULT NULL COMMENT '更新者',
+  update_time datetime DEFAULT NULL COMMENT '更新时间',
+  remark varchar(500) DEFAULT NULL COMMENT '备注',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_batch_active (batch_no, (CASE WHEN del_flag = 0 THEN 1 ELSE NULL END))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='伐区申报清册批次台账';
+
+-- 同批次 + 同明细码的"已收行"只许一条：批内去重 / 重发幂等由库兜底并发；
+-- 失败行(status=2)不占位，整批同码多行的失败留痕照常落库。
+CREATE UNIQUE INDEX ux_declare_active_code ON t_flog_declare_row
+  (batch_no, item_code, (CASE WHEN status = 1 AND del_flag = 0 THEN 1 ELSE NULL END));
+
+-- 建档卡号活跃唯一：同号两卡不得并存（并发抢注由库拒入），软删卡不占位。
+CREATE UNIQUE INDEX ux_apply_active_bill ON t_flog_apply_card
+  (bill_no, (CASE WHEN del_flag = 0 THEN 1 ELSE NULL END));
+
 -- 初始底档数据（在册、已收回两类各一条）
 -- t_flog_stand_doc 两条种子底档：id=0 在册、id=1 已收回。
 -- 单卡拟采蓄积三线上限取 40/120/300 立方米（等于上限算高一档）。

@@ -16,8 +16,8 @@ public interface ITFlogDeclareRowService {
     TFlogDeclareRow selectTFlogDeclareRowById(Long id);
 
     /**
-     * 整批提交：逐行校验，合法的入库、非法的记入失败明细（保留原始行号），返回**成功行数**。
-     * 同一批次重复提交不得重复入库；行数超过单批上限返回 -1 且整批不入库；空批次返回 0。
+     * 整批提交：逐行核收，合法的入库、非法的记入失败明细（保留原始行号），返回**成功行数**。
+     * 单批行数不设封顶；同一批次号重复提交幂等返回头一次的成功行数，不重复入库；空批次返回 0。
      */
     int submitBatch(String batchNo, List<TFlogDeclareRow> rows);
 
